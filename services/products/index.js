@@ -1,16 +1,46 @@
 const express = require('express');
 const cors = require('cors');
-const jwt = require('jsonwebtoken');
-
+const dotenv = require('dotenv');
+dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3002;
-
-// JWT Secret (in production, use environment variable)
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Role-based authorization middleware
+const requireAdminRole = (req, res, next) => {
+  // Get user info from headers (set by API Gateway)
+  const userRole = req.headers['x-user-role'];
+  const userId = req.headers['x-user-id'];
+  const username = req.headers['x-username'];
+
+  if (!userRole || !userId || !username) {
+    return res.status(401).json({
+      success: false,
+      message: 'User information not found. Please authenticate through the API Gateway.'
+    });
+  }
+
+  if (userRole !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Admin role required for this operation',
+      requiredRole: 'admin',
+      userRole: userRole
+    });
+  }
+
+  // Add user info to request for logging/auditing
+  req.user = {
+    id: userId,
+    username: username,
+    role: userRole
+  };
+
+  next();
+};
 
 // Mock products database
 let products = [
@@ -165,29 +195,6 @@ let products = [
     updatedAt: new Date('2024-01-02')
   }
 ];
-
-// Middleware to verify JWT token (optional for some endpoints)
-const verifyToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1]; // Bearer TOKEN
-
-  if (!token) {
-    return res.status(401).json({
-      success: false,
-      message: 'Access token required'
-    });
-  }
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (error) {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid or expired token'
-    });
-  }
-};
 
 // Helper function to search products
 const searchProducts = (query, category, minPrice, maxPrice, inStock) => {
@@ -475,7 +482,7 @@ app.post('/api/products/check-availability', (req, res) => {
 });
 
 // Update product stock (for order processing)
-app.put('/api/products/:id/stock', verifyToken, (req, res) => {
+app.put('/api/products/:id/stock', requireAdminRole, (req, res) => {
   try {
     const productId = parseInt(req.params.id);
     const { quantity, operation = 'decrease' } = req.body; // operation: 'decrease' or 'increase'
@@ -536,7 +543,7 @@ app.put('/api/products/:id/stock', verifyToken, (req, res) => {
 });
 
 // Admin endpoints (protected)
-app.post('/api/products', verifyToken, (req, res) => {
+app.post('/api/products', requireAdminRole, (req, res) => {
   try {
     const { name, description, price, category, stock, image, brand } = req.body;
 
@@ -566,10 +573,14 @@ app.post('/api/products', verifyToken, (req, res) => {
 
     products.push(newProduct);
 
+    // Log admin action
+    console.log(`[ADMIN ACTION] Product created by ${req.user.username} (ID: ${req.user.id}): ${name}`);
+
     res.status(201).json({
       success: true,
       message: 'Product created successfully',
-      data: newProduct
+      data: newProduct,
+      createdBy: req.user.username
     });
   } catch (error) {
     res.status(500).json({
@@ -580,7 +591,7 @@ app.post('/api/products', verifyToken, (req, res) => {
   }
 });
 
-app.put('/api/products/:id', verifyToken, (req, res) => {
+app.put('/api/products/:id', requireAdminRole, (req, res) => {
   try {
     const productId = parseInt(req.params.id);
     const productIndex = products.findIndex(p => p.id === productId);
@@ -602,10 +613,14 @@ app.put('/api/products/:id', verifyToken, (req, res) => {
 
     products[productIndex] = { ...products[productIndex], ...updatedFields };
 
+    // Log admin action
+    console.log(`[ADMIN ACTION] Product updated by ${req.user.username} (ID: ${req.user.id}): ${products[productIndex].name}`);
+
     res.json({
       success: true,
       message: 'Product updated successfully',
-      data: products[productIndex]
+      data: products[productIndex],
+      updatedBy: req.user.username
     });
   } catch (error) {
     res.status(500).json({
@@ -616,7 +631,7 @@ app.put('/api/products/:id', verifyToken, (req, res) => {
   }
 });
 
-app.delete('/api/products/:id', verifyToken, (req, res) => {
+app.delete('/api/products/:id', requireAdminRole, (req, res) => {
   try {
     const productId = parseInt(req.params.id);
     const productIndex = products.findIndex(p => p.id === productId);
@@ -630,10 +645,14 @@ app.delete('/api/products/:id', verifyToken, (req, res) => {
 
     const deletedProduct = products.splice(productIndex, 1)[0];
 
+    // Log admin action
+    console.log(`[ADMIN ACTION] Product deleted by ${req.user.username} (ID: ${req.user.id}): ${deletedProduct.name}`);
+
     res.json({
       success: true,
       message: 'Product deleted successfully',
-      data: deletedProduct
+      data: deletedProduct,
+      deletedBy: req.user.username
     });
   } catch (error) {
     res.status(500).json({
@@ -666,10 +685,10 @@ app.get('/', (req, res) => {
       getProductsByCategory: 'GET /api/products/category/:category',
       getCategories: 'GET /api/categories',
       checkAvailability: 'POST /api/products/check-availability',
-      updateStock: 'PUT /api/products/:id/stock (requires auth)',
-      createProduct: 'POST /api/products (requires auth)',
-      updateProduct: 'PUT /api/products/:id (requires auth)',
-      deleteProduct: 'DELETE /api/products/:id (requires auth)',
+      updateStock: 'PUT /api/products/:id/stock (requires admin role)',
+      createProduct: 'POST /api/products (requires admin role)',
+      updateProduct: 'PUT /api/products/:id (requires admin role)',
+      deleteProduct: 'DELETE /api/products/:id (requires admin role)',
       health: 'GET /api/health'
     }
   });
@@ -685,10 +704,10 @@ app.listen(PORT, () => {
   console.log(`- GET /api/products/category/:category (products by category)`);
   console.log(`- GET /api/categories (all categories)`);
   console.log(`- POST /api/products/check-availability (inventory check)`);
-  console.log(`- PUT /api/products/:id/stock (update stock - requires auth)`);
-  console.log(`- POST /api/products (create product - requires auth)`);
-  console.log(`- PUT /api/products/:id (update product - requires auth)`);
-  console.log(`- DELETE /api/products/:id (delete product - requires auth)`);
+  console.log(`- PUT /api/products/:id/stock (update stock - requires admin role)`);
+  console.log(`- POST /api/products (create product - requires admin role)`);
+  console.log(`- PUT /api/products/:id (update product - requires admin role)`);
+  console.log(`- DELETE /api/products/:id (delete product - requires admin role)`);
   console.log(`- GET /api/health (health check)`);
 });
 

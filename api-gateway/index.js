@@ -5,6 +5,9 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
+const dotenv = require('dotenv');
+
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,28 +24,41 @@ const SERVICE_URLS = {
   notifications: process.env.NOTIFICATIONS_SERVICE_URL || 'http://localhost:3005'
 };
 
+// Log the actual service URLs being used
+console.log('SERVICE_URLS:', SERVICE_URLS);
+
+// Prevent infinite loop: users service must not point to the gateway itself
+if (
+  SERVICE_URLS.users === `http://localhost:${PORT}` ||
+  SERVICE_URLS.users === `http://127.0.0.1:${PORT}`
+) {
+  throw new Error(
+    `USERS_SERVICE_URL is set to the API Gateway's own address (${SERVICE_URLS.users}). This will cause an infinite loop!`
+  );
+}
+
 // Security middleware
 app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// app.use(express.json());
+// app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Logging middleware
 app.use(morgan('combined'));
 
 // Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: {
-    success: false,
-    message: 'Too many requests from this IP, please try again later.'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// const limiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   max: 100, // limit each IP to 100 requests per windowMs
+//   message: {
+//     success: false,
+//     message: 'Too many requests from this IP, please try again later.'
+//   },
+//   standardHeaders: true,
+//   legacyHeaders: false,
+// });
 
-app.use(limiter);
+// app.use(limiter);
 
 // JWT Authentication Middleware
 const authenticateToken = (req, res, next) => {
@@ -106,14 +122,34 @@ app.get('/api/health/services', async (req, res) => {
   });
 });
 
+// Test endpoint to verify Users service connectivity
+app.get('/api/test-users', async (req, res) => {
+  try {
+    console.log(`[TEST] Making direct request to ${SERVICE_URLS.users}/api/health`);
+    const response = await fetch(`${SERVICE_URLS.users}/api/health`);
+    const data = await response.json();
+    res.json({
+      success: true,
+      message: 'Direct request to Users service successful',
+      usersServiceResponse: data
+    });
+  } catch (error) {
+    console.error('[TEST ERROR]', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to connect to Users service',
+      error: error.message
+    });
+  }
+});
+
 // Users Service Routes
 app.use('/api/auth', createProxyMiddleware({
   target: SERVICE_URLS.users,
   changeOrigin: true,
   pathRewrite: {
     '^/api/auth': '/api'
-  },
-  logLevel: 'silent'
+  }
 }));
 
 // Products Service Routes (public endpoints)
@@ -129,6 +165,14 @@ app.use('/api/admin/products', authenticateToken, createProxyMiddleware({
   changeOrigin: true,
   pathRewrite: {
     '^/api/admin/products': '/api/products'
+  },
+  onProxyReq: (proxyReq, req, res) => {
+    // Pass user information to the Products service for authorization
+    if (req.user) {
+      proxyReq.setHeader('x-user-id', req.user.id);
+      proxyReq.setHeader('x-username', req.user.username);
+      proxyReq.setHeader('x-user-role', req.user.role);
+    }
   },
   logLevel: 'silent'
 }));
