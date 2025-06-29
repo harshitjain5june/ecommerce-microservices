@@ -6,6 +6,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const dotenv = require('dotenv');
+const bodyParser = require('body-parser');
 
 dotenv.config();
 
@@ -40,6 +41,11 @@ if (
 // Security middleware
 app.use(helmet());
 app.use(cors());
+app.use(bodyParser.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 // app.use(express.json());
 // app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -47,18 +53,18 @@ app.use(cors());
 app.use(morgan('combined'));
 
 // Rate limiting
-// const limiter = rateLimit({
-//   windowMs: 15 * 60 * 1000, // 15 minutes
-//   max: 100, // limit each IP to 100 requests per windowMs
-//   message: {
-//     success: false,
-//     message: 'Too many requests from this IP, please try again later.'
-//   },
-//   standardHeaders: true,
-//   legacyHeaders: false,
-// });
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: {
+    success: false,
+    message: 'Too many requests from this IP, please try again later.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
-// app.use(limiter);
+app.use(limiter);
 
 // JWT Authentication Middleware
 const authenticateToken = (req, res, next) => {
@@ -177,10 +183,21 @@ app.use('/api/admin/products', authenticateToken, createProxyMiddleware({
   logLevel: 'silent'
 }));
 
+
+
 // Cart Service Routes (authenticated)
 app.use('/api/cart', authenticateToken, createProxyMiddleware({
   target: SERVICE_URLS.cart,
   changeOrigin: true,
+  selfHandleResponse: false,
+  onProxyReq: (proxyReq, req, res) => {
+    if (req.rawBody) {
+      console.log(`[PROXY] Forwarding request body to Cart service: ${req.rawBody}`);
+      proxyReq.setHeader('Content-Type', 'application/json');
+      proxyReq.setHeader('Content-Length', Buffer.byteLength(req.rawBody));
+      proxyReq.write(req.rawBody);
+    }
+  },
   logLevel: 'silent'
 }));
 
