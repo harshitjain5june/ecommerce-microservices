@@ -1,0 +1,84 @@
+version: '3.9'
+
+services:
+  users-service:
+    build:
+      context: ./services/users
+    container_name: users-service
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+    restart: unless-stopped
+
+  products-service:
+    build:
+      context: ./services/products
+    container_name: products-service
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+    restart: unless-stopped
+
+  cart-service:
+    build:
+      context: ./services/cart
+    container_name: cart-service
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - PRODUCTS_SERVICE_URL=http://products-service:3002
+    restart: unless-stopped
+    depends_on:
+      - products-service
+
+  orders-service:
+    build:
+      context: ./services/order
+    container_name: orders-service
+    ports:
+      - "3004:3004"
+    environment:
+      - PORT=3004
+      - CART_SERVICE_URL=http://cart-service:3003
+      - PRODUCTS_SERVICE_URL=http://products-service:3002
+      - NOTIFICATIONS_SERVICE_URL=http://notifications-service:3005
+      - JWT_SECRET=your-super-secret-jwt-key
+    restart: unless-stopped
+    depends_on:
+      - cart-service
+      - products-service
+      - notifications-service
+
+  notifications-service:
+    build:
+      context: ./services/notifications
+    container_name: notifications-service
+    ports:
+      - "3005:3005"
+    environment:
+      - PORT=3005
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+    container_name: api-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - USERS_SERVICE_URL=http://users-service:3001
+      - PRODUCTS_SERVICE_URL=http://products-service:3002
+      - CART_SERVICE_URL=http://cart-service:3003
+      - ORDERS_SERVICE_URL=http://orders-service:3004
+      - NOTIFICATIONS_SERVICE_URL=http://notifications-service:3005
+    restart: unless-stopped
+    depends_on:
+      - users-service
+      - products-service
+      - cart-service
+      - orders-service
+      - notifications-service
